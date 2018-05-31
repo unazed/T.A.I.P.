@@ -5,6 +5,7 @@ at the moment (2:21 31st May '18), the interpreter supports:
 - simple compilation-error tracebacks
 - generation of dynamic opcode/operand listings from source
 - namespaces (which could inherently allow support for stack-frames and heap)
+
 and at the moment (2:23 31st May '18), the interpreter plans on (soon) supporting:
 - genuine opcode parsing and detection
 - opcode operand template generation
