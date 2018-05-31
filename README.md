@@ -53,7 +53,8 @@ mov my_variable, $0x69 ; support for octal, hexadecimal, binary and
 
 some further notes that'd probably be useful to know are that
 - upon any error the compiler can give you the (approx.) area whereabouts the parsing error occurred ('approx.' because the context handler's `__exit__` is pretty shadily written with hard-coded offsets) and specifically the line/char. no. at which the error was.
-- you can enable some fairly verbose debugging by setting `DEBUG=1` in your environment variables. For example I run my code with the command `DEBUG=1 python3.8 asm.py asm.S`
+- you can enable some fairly verbose debugging by setting `DEBUG=1` in your environment variables. For example I run my code with the command `DEBUG=1 python3.8 asm.py asm.S`.
 - you can change around all the identities for the individual types of tokens e.g. string identifiers could be changed to \` instead of ", or literal identifiers could become \# instead of $ etc.
-- python 3.8 is the version i've tested it on, however it probably works on other versions. mainly i just wanted you to know i'm in the future
+- python 3.8 is the version i've tested it on, however it probably works on other versions. mainly i just wanted you to know i'm in the future.
 - the (perhaps seemingly) redundant `enumerate`ions performed in the `_parse_*` family of functions are (notably) done so that the traceback frame in the `__exit__` handler can recall specific character offsets during parsing and provide better traceback information when `sys.exit`/compilation errors occur.
+- variables are called `Reference`s, and these `Reference`s are paired with a `ReferencePointer`; both of these are `collections.namedtuple`s.
