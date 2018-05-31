@@ -20,13 +20,12 @@ the syntax is defined in `asm.py`, alongside everything else. but for time's sak
 
 ```
 ; whole-line comments
-mov %rax, @print ; internal comments
-push "hello, world!" ; you can push immediates!!! how unusual
-call %rax, $1, @str ; registers prefixed with %
-                    ; (integer) immediates prefixed with $
-                    ; external references (outwith the local scope)
-                    ; are referred to by prefixing its name with @
-                    ; e.g.: @print, @idx, @self etc.
+push "hello, world!" ; you can push immediates!!! how unusual (also internal comments)
+call @print, $1, @str ; registers prefixed with %
+                      ; (integer) immediates prefixed with $
+                      ; external references (outwith the local scope)
+                      ; are referred to by prefixing its name with @
+                      ; e.g.: @print, @idx, @self etc.
 mov my_variable, $0x69 ; support for octal, hexadecimal, binary and
                        ; standard base 10 integral notation.
                        ; also if variables aren't already defined in
