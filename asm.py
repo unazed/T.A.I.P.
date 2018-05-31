@@ -388,7 +388,7 @@ class Parser(object):
             debug_print("verify_operands: types = %s" % (types,))
             if types not in templates:
                 sys.exit(("error: invalid operands for opcode %r at instruction #%d\n\t" % (opcode, idx+1)) + 
-                         "expected %s\n\tgot %r" % ('\n\t\t '.join("%s" % (t,) for t in templates), types)
+                         "expected %s\n\tgot %r" % ('\n\t\t '.join("%s %s" % (opcode, ', '.join("%s" % c for c in t)) for t in templates), types)
                         )
         return True
 
