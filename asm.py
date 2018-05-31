@@ -36,6 +36,7 @@ import sys
 import os
 import io
 import string
+import builtins
 from collections import namedtuple
 
 if len(sys.argv) < 2:
@@ -94,6 +95,8 @@ class Parser(object):
 
     VALID_CHARSET = string.ascii_letters + string.digits + "_"
 
+    EXTREF_LOCATIONS = (globals, locals, lambda: builtins.__dict__)
+
     parser_namespace = Namespace()
     for name in ("rax", "rbx", "rcx", "rdx", "rsp", "rbp"):
         parser_namespace.add_register(name)
@@ -143,6 +146,7 @@ class Parser(object):
 
     def _parse_token(self, substring, is_register, define_references=True):
         token = ""
+        idx = 0  # for __exit__
         if not substring[0].isalpha():
             sys.exit("error: invalid token identifier")
         for idx, char in enumerate(substring):
@@ -167,10 +171,44 @@ class Parser(object):
         return self.parser_namespace.get_variable(token), len(token)
 
     def _parse_string(self, substring):
-        
+        token = ""
+        excess = 1
+        for idx, char in enumerate(substring):
+            prev_char = substring[idx-1] if idx-1 >= 0 else None
+            next_char = substring[idx+1] if idx+1 < len(substring) else None
+            debug_print("_parse_string: ... prev char: %r curr. char: %r next char: %r" % (prev_char, char, next_char))
+            if char == "\\" and next_char == self.STRING_IDENT:
+                token += self.STRING_IDENT
+                excess += 1
+                continue
+            elif char == "\\":
+                sys.exit("error: invalid string literal escape")
+            elif char == self.STRING_IDENT and prev_char == "\\":
+                continue
+            elif char == self.STRING_IDENT:
+                break
+            token += char
+        return token, (len(token)+excess)
 
     def _parse_extref(self, substring):
-        pass
+        token = ""
+        idx = 0
+        if not substring[0].isalpha():
+            sys.exit("error: invalid ext. reference identifier")
+        for idx, char in enumerate(substring):
+            debug_print("_parse_extref: ... %r" % char)
+            if char in (",", " "):
+                break
+            elif char not in self.VALID_CHARSET:
+                sys.exit("error: invalid ext. reference identifier")
+            token += char
+        debug_print("_parse_extref:", token)
+        ref = None
+        for loc in self.EXTREF_LOCATIONS:
+            ref = loc().get(token, None)
+            if ref is not None:
+                return ref, len(token)
+        sys.exit("error: non-existent ext. reference")
 
     def __enter__(self):
         debug_print("entering with context-handler")
@@ -254,7 +292,9 @@ class Parser(object):
                 else:
                     sys.exit("error: invalid indentifier")
                 disable_parsing = wait
-                tokens.append(string)
+                debug_print("string =", string)
+                if string:
+                    tokens.append(string)
                 debug_print(tokens)
 
 def debug_print(*args, **kwargs):
