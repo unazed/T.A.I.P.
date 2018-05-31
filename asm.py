@@ -1,37 +1,3 @@
-"""
-General syntax format:
-    `opcode [dst[, src[, op(s)]]]`
-With prefixed literal identifiers:
-    `%` register
-    `$` immediate
-    `@` ext. reference (e.g. within `__builtins__` or `globals()/locals()`)
-And no prefix notation for identifiers e.g.:
-    `mov %eax, my_variable`
-All of which can be surveyed within this example:
-    set my_string, "Hello, world!"
-    set my_age, $17
-    mov %eax, my_variable
-    mov %ebx, my_age
-    push %eax
-    call @print, $1
-    ; at this point the `call @print` pops `$1` items off the stack
-    ; so you don't need to pop it yourself manually
-    push %ebx
-    call @print, $1, @str
-    ; the third argument of `call` is the mapping function unto
-    ; the second argument, equivalent to
-    ;   mov %ebx, $17
-    ;   push %ebx
-    ;   call @str, $1
-    ;   push %eax
-    ;   call @print, $1
-    ; note: any function return is stored in the eax register
-    ;       as (possibly) an invalid type that you can't deal
-    ;       with, so you would need to convert it to an integer,
-    ;       string or something usable within this restricted
-    ;       context
-"""
-
 import sys
 import os
 import io
