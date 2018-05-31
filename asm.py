@@ -48,7 +48,6 @@ Register = namedtuple("Register", ["name", "data", "type", "size"])
 Immediate = namedtuple("Immediate", ["data", "type"])
 ReferencePointer = namedtuple("ReferencePointer", ["reference", "type"])
 Reference = namedtuple("Reference", ["name", "data", "reference", "type"])
-Reference.__str__ = lambda self: "Reference"
 # the type fields on ReferencePointer and Reference are
 # practically shadow copies of each other, however when
 # you change the ReferencePointer's typefield you're
@@ -66,10 +65,12 @@ class Namespace(object):
             # no overflowing here buddy
         self.registers.add(Register(name, data, type(data), size))
     def add_variable(self, name, data):
+        debug_print("add_variable: name = %s data = %s" % (name, str(data)[:100]))
         reference = Reference(name, data, None, type(data))
-        reference_p = ReferencePointer(reference, type(data))
-        self.set_variable(reference.name, "reference", reference_p)
-        self.variables.add(reference_p)
+        reference = reference._replace(reference=ReferencePointer(reference, type(data)))
+        # one-layer circular reference pointing
+        # so many fucking `reference`s
+        self.variables.add(reference.reference)
         # this implementation has the issue that it won't allow
         # disjoint ReferencePointers to point to the same object
         # because the inherent behaviour of sets would eliminate
@@ -79,21 +80,37 @@ class Namespace(object):
         # simply just switch to class-generated structures instead
         # of namedtuples
     def set_variable(self, name, attr, newattr):
+        debug_print("set_variable: name = %s attr = %s newattr = %s" % (name, attr, newattr))
         var_p = self.get_variable(name)
-        if not var_p:
-            return False
-        new_var_p = var_p._replace(reference=var_p.reference._replace(**{attr: newattr}))
-        self.variables.remove(var_p)
-        self.variables.add(new_var_p)
-        debug_print("set_variable:", new_var_p)
+        reg = self.get_register(name)
+        if reg:
+            new_reg = reg._replace(**{attr: newattr})
+            if attr == "data" and isinstance(newattr, int) and newattr.bit_length() > reg.size:
+                sys.exit("error: operand-size mismatch with register size")
+            new_reg = new_reg._replace(type=type(newattr))
+            debug_print("set_register: from %s to %s" % (reg, new_reg))
+            self.registers.remove(reg)
+            self.registers.add(new_reg)
+        elif var_p:
+            var = var_p.reference
+            new_var = var._replace(**{attr: newattr})
+            new_var = new_var._replace(type=type(newattr))
+            new_var_p = var_p._replace(type=type(newattr))
+            new_var_p = new_var_p._replace(reference=new_var)
+            # new_var = new_var._replace(reference=new_var_p) ; redundant?
+            debug_print("set_variable: from %s to %s" % (var, new_var))
+            self.variables.remove(var_p)
+            self.variables.add(new_var_p)
         return True
     def get_register(self, name):
         for register in self.registers:
+            debug_print("get_register: register.name = %s" % register.name)
             if register.name == name:
                 return register
         return False
     def get_variable(self, name):
         for variable in self.variables:
+            debug_print("get_variable: variable.name = %s" % variable.reference.name)
             if variable.reference.name == name:
                 return variable
         return False
@@ -119,14 +136,15 @@ class Parser(object):
             if op2.type is not int else
             sys.exit("runtime error: #3 operand not callable in call")
             if not callable(op3.data) else
-            op1.data(*[op3.data(item) for item in self.stack[:op2.data]]),
+            op1.data(*[op3.data(item.data) for item in self.stack[:op2.data]]),
         "push": lambda self, op1:
-            self.stack.append(op1),
+            self.stack.insert(0, op1),
         "pop": lambda self, op1:
             (
                 self.parser_namespace.set_variable(op1.name, "data", self.stack.pop()),
                 self.parser_namespace.set_variable(op1.name, "type", type(op1.data)),
                 self.parser_namespace.set_variable(op1.name, "reference", op1.reference._replace(type=type(op1.data)))
+                if isinstance(op1, ReferencePointer) else None
             ),
         "inc": lambda self, op1:
             self.parser_namespace.set_variable(op1.name, "data", op1.data+1)
@@ -136,11 +154,13 @@ class Parser(object):
             self.parser_namespace.set_variable(op1.name, "data", op1.data+op2.data)
             if (op1.type is int and op2.type is int) or
                (op1.type is str and op2.type is str) else
-            sys.exit("runtime error: #1/#2 operand types must be valid in add")
+            sys.exit("runtime error: #1/#2 operand types must be valid in add"),
+        "breakpoint": lambda _:
+            breakpoint()
     }
 
     opcode_operand_template = {
-        (): (),
+        (): ("breakpoint",),
         (Register,): ("call", "inc", "push", "pop"),
         (Reference,): ("call", "inc", "push", "pop"),
         (Immediate,): ("push",),
@@ -224,6 +244,7 @@ class Parser(object):
                 sys.exit("error: undefined register identifier")
             return reg, len(token)
         variable = self.parser_namespace.get_variable(token)
+        debug_print("_parse_token: variable = %s" % (variable,))
         if not variable and not define_references:
             sys.exit("error: undefined variable identifier")
         elif not variable:
@@ -264,12 +285,14 @@ class Parser(object):
                 sys.exit("error: invalid ext. reference identifier")
             token += char
         debug_print("_parse_extref:", token)
-        ref = None
+        #print(token)
         for loc in self.EXTREF_LOCATIONS:
             ref = loc().get(token, None)
             if ref is not None:
                 self.parser_namespace.add_variable("@%s" % token, ref)
-                return self.parser_namespace.get_variable("@%s" % token).reference, len(token)
+                var = self.parser_namespace.get_variable("@%s" % token).reference
+                debug_print("_parse_extref: var = %s" % (var,))
+                return var, len(token)
         sys.exit("error: non-existent ext. reference")
 
     def __enter__(self):
@@ -375,6 +398,7 @@ class Parser(object):
         return opcode_operand
 
     def verify_operands(self, instructions):
+        new_opcodes = []
         for idx, instruction in enumerate(instructions):
             opcode, *operands = instruction
             debug_print("verify_operands: opcode = %s operands = %s" % (opcode, operands))
@@ -386,11 +410,39 @@ class Parser(object):
                     templates.append(k)
             types = (*map(type, operands),)
             debug_print("verify_operands: types = %s" % (types,))
+            debug_print("verify_operands: templates = %s" % (templates,))
             if types not in templates:
                 sys.exit(("error: invalid operands for opcode %r at instruction #%d\n\t" % (opcode, idx+1)) + 
                          "expected %s\n\tgot %r" % ('\n\t\t '.join("%s %s" % (opcode, ', '.join("%s" % c for c in t)) for t in templates), types)
                         )
-        return True
+            new_opcodes.append([self.opcode_function_map[opcode], *operands])
+        debug_print("verify_operands: new_opcodes = %s" % (new_opcodes,))
+        return new_opcodes
+
+    def execute_instructions(self, instructions):
+        for instruction in instructions:
+            new_ops = []  # this solution took 1.5 hours to find
+            if len(instruction) > 1:
+                for op in instruction[1:]:
+                    if isinstance(op, Register):
+                        new_ops.append(self.parser_namespace.get_register(op.name))
+                    elif isinstance(op, Reference):
+                        new_ops.append(self.parser_namespace.get_variable(op.name).reference)
+                    else:
+                        new_ops.append(op)
+                instruction = [instruction[0], *new_ops]
+            debug_print("execute_instruction:\n\t\t\b", '\n\t\t'.join("- %s" % (c,) for c in instruction))
+            instruction[0](self, *instruction[1:])
+
+    def print_registers(self):
+        print("REGISTER DUMP:")
+        for register in self.parser_namespace.registers:
+            print("\t%s %r: %r" % (register.name, register.type, register.data))
+
+    def print_stack(self):
+        print("STACK DUMP:")
+        for item in self.stack:
+            print("\t%r: %r" % (type(item), item))
 
 
 def debug_print(*args, **kwargs):
@@ -410,4 +462,7 @@ if not os.path.isfile(filename):
 
 with Parser(filename) as parser:
     instructions = parser.parse_instructions()
-    parser.verify_operands(instructions)
+    parsed_instructions = parser.verify_operands(instructions)
+    parser.execute_instructions(parsed_instructions)
+    parser.print_registers()
+    parser.print_stack()
