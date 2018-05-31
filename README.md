@@ -1,7 +1,7 @@
 # T.A.I.P.
 the assembly interpeter [in] python (also taip means yes in my language)
 
-at the moment (2:21 31st May '18), the interpreter supports:
+at the moment (00:29 1st June '18), the interpreter supports:
 - simple compilation-error tracebacks
 - generation of dynamic opcode/operand listings from source
 - namespaces (which could inherently allow support for stack-frames and heap)
@@ -9,7 +9,7 @@ at the moment (2:21 31st May '18), the interpreter supports:
 - executing instructions
 - some basic instructions
 
-and at the moment (2:23 31st May '18), the interpreter plans on (soon) supporting:
+and at the moment (00:30 1st June '18), the interpreter plans on (soon) supporting:
 - ~~genuine opcode parsing and detection~~
 - ~~opcode operand template generation~~ (no idea what i even meant by this)
 - stack frames (kinda supported but not fully implemented)
