@@ -37,16 +37,18 @@ import os
 import io
 import string
 import builtins
+from pprint import pprint
 from collections import namedtuple
 
 if len(sys.argv) < 2:
     sys.exit("error:\n\tusage: python3.8 <path/to/script>")
 
 
-Register = namedtuple("Register", ["name", "data", "size"])
+Register = namedtuple("Register", ["name", "data", "type", "size"])
 Immediate = namedtuple("Immediate", ["data", "type"])
 ReferencePointer = namedtuple("ReferencePointer", ["reference", "type"])
-Reference = namedtuple("Reference", ["name", "data", "type"])
+Reference = namedtuple("Reference", ["name", "data", "reference", "type"])
+Reference.__str__ = lambda self: "Reference"
 # the type fields on ReferencePointer and Reference are
 # practically shadow copies of each other, however when
 # you change the ReferencePointer's typefield you're
@@ -62,10 +64,11 @@ class Namespace(object):
         if isinstance(data, int) and data.bit_length() > size:
             sys.exit("error: operand-size mismatch with register size")
             # no overflowing here buddy
-        self.registers.add(Register(name, data, size))
+        self.registers.add(Register(name, data, type(data), size))
     def add_variable(self, name, data):
-        reference = Reference(name, data, type(data))
+        reference = Reference(name, data, None, type(data))
         reference_p = ReferencePointer(reference, type(data))
+        self.set_variable(reference.name, "reference", reference_p)
         self.variables.add(reference_p)
         # this implementation has the issue that it won't allow
         # disjoint ReferencePointers to point to the same object
@@ -75,6 +78,15 @@ class Namespace(object):
         # itself; and later on, if this becomes an issue one can
         # simply just switch to class-generated structures instead
         # of namedtuples
+    def set_variable(self, name, attr, newattr):
+        var_p = self.get_variable(name)
+        if not var_p:
+            return False
+        new_var_p = var_p._replace(reference=var_p.reference._replace(**{attr: newattr}))
+        self.variables.remove(var_p)
+        self.variables.add(new_var_p)
+        debug_print("set_variable:", new_var_p)
+        return True
     def get_register(self, name):
         for register in self.registers:
             if register.name == name:
@@ -97,12 +109,62 @@ class Parser(object):
 
     EXTREF_LOCATIONS = (globals, locals, lambda: builtins.__dict__)
 
+    opcode_function_map = {
+        "mov": lambda self, op1, op2:
+            self.parser_namespace.set_variable(op1.name, "data", op2.data),
+        "call": lambda self, op1, op2=Immediate(0, int), op3=Reference(None, str, None, None):
+            sys.exit("runtime error: #1 operand not callable in call")
+            if not callable(op1.data) else
+            sys.exit("runtime error: #2 operand not integer in call")
+            if op2.type is not int else
+            sys.exit("runtime error: #3 operand not callable in call")
+            if not callable(op3.data) else
+            op1.data(*[op3.data(item) for item in self.stack[:op2.data]]),
+        "push": lambda self, op1:
+            self.stack.append(op1),
+        "pop": lambda self, op1:
+            (
+                self.parser_namespace.set_variable(op1.name, "data", self.stack.pop()),
+                self.parser_namespace.set_variable(op1.name, "type", type(op1.data)),
+                self.parser_namespace.set_variable(op1.name, "reference", op1.reference._replace(type=type(op1.data)))
+            ),
+        "inc": lambda self, op1:
+            self.parser_namespace.set_variable(op1.name, "data", op1.data+1)
+            if op1.type is int else
+            sys.exit("runtime error: #1 operand not integer in inc"),
+        "add": lambda self, op1, op2:
+            self.parser_namespace.set_variable(op1.name, "data", op1.data+op2.data)
+            if (op1.type is int and op2.type is int) or
+               (op1.type is str and op2.type is str) else
+            sys.exit("runtime error: #1/#2 operand types must be valid in add")
+    }
+
+    opcode_operand_template = {
+        (): (),
+        (Register,): ("call", "inc", "push", "pop"),
+        (Reference,): ("call", "inc", "push", "pop"),
+        (Immediate,): ("push",),
+
+        (Register, Register): ("mov", "add"),
+        (Register, Immediate): ("mov", "add"),
+        (Register, Reference): ("mov", "add"),
+        (Reference, Immediate): ("mov", "call", "add"),
+        (Reference, Register): ("mov", "call", "add"),
+        (Reference, Reference): ("mov", "call", "add"),  # typically mem <- mem operations aren't permissible
+        
+        (Reference, Register, Reference): ("call",),
+        (Reference, Immediate, Reference): ("call",),
+        (Reference, Reference, Reference): ("call",)
+    }
+    # a ReferencePointer is basically just a memory location
+    
     parser_namespace = Namespace()
     for name in ("rax", "rbx", "rcx", "rdx", "rsp", "rbp"):
         parser_namespace.add_register(name)
 
     def __init__(self, filename):
         self._fileobj = None
+        self.stack = []
         if isinstance(filename, io.TextIOWrapper):
             debug_print("treating filename as a file-object")
             self._fileobj = filename
@@ -123,7 +185,6 @@ class Parser(object):
         wait = 0 if is_b10 else 2
         # the 0 and 2 are character-bypass times so that the `0n` isn't parsed
         is_hex = substring[:2] == "0x"  # individual case checking
-
         ord_fn = {
             "0x": lambda n: int(n, 16),
             "0b": lambda n: int(n, 2),
@@ -168,7 +229,7 @@ class Parser(object):
         elif not variable:
             debug_print("_parse_token: undefined variable-name: %s found, defining..." % token)
             self.parser_namespace.add_variable(token, None)
-        return self.parser_namespace.get_variable(token), len(token)
+        return self.parser_namespace.get_variable(token).reference, len(token)
 
     def _parse_string(self, substring):
         token = ""
@@ -207,7 +268,8 @@ class Parser(object):
         for loc in self.EXTREF_LOCATIONS:
             ref = loc().get(token, None)
             if ref is not None:
-                return ref, len(token)
+                self.parser_namespace.add_variable("@%s" % token, ref)
+                return self.parser_namespace.get_variable("@%s" % token).reference, len(token)
         sys.exit("error: non-existent ext. reference")
 
     def __enter__(self):
@@ -218,8 +280,12 @@ class Parser(object):
         debug_print("exiting with context-handler, exception arguments:", (exc_class, exc_info, exc_tb))
         if exc_class is None:
             return
-        while exc_tb.tb_frame.f_code.co_name != "parse_instructions":
-            exc_tb = exc_tb.tb_next
+        try:
+            while exc_tb.tb_frame.f_code.co_name != "parse_instructions":
+                exc_tb = exc_tb.tb_next
+        except AttributeError:
+            debug_print("attribute error on context-handler, cba handling this so just pass silently")
+            return
         line_no = exc_tb.tb_frame.f_locals['line_no']+1
         char_ofs = exc_tb.tb_frame.f_locals['idx']+1 + len(exc_tb.tb_frame.f_locals['opcode'])
         next_frame = exc_tb.tb_next
@@ -233,16 +299,17 @@ class Parser(object):
             char_ofs += next_frame.tb_frame.f_locals['idx']
             print("info: error occurred during parsing %s:%s" % (line_no, char_ofs+1))
 
-    def parse_instructions(self):
+    def parse_instructions(self, define_symbols=True):
         """Parse the individual instructions from `self.data` and convert to its appropriate
         representation"""
 
         substring = lambda idx, string: string[idx+1:]  # don't want to include the character being evaluated
-        tokens = []
+        opcode_operand = []
         current_token = ""
         disable_parsing = 0
 
         for line_no, line in enumerate(self.data.splitlines()):
+            tokens = []
             if not line:
                 continue
             # line_no is used by __exit__
@@ -254,7 +321,13 @@ class Parser(object):
             if line.startswith(self.COMMENT_IDENT):
                 debug_print("... found whole-line comment, skipping to next line")
                 continue
-            opcode, line = line.split(" ", 1)
+            full_line = line.split(" ", 1)
+            if len(full_line) == 1:
+                opcode = full_line[0]
+                opcode_operand.append([opcode])
+                continue
+            opcode, line = full_line
+
             debug_print("... opcode: ", opcode)
             for idx, char in enumerate(line):
                 debug_print("... %r" % char)
@@ -274,20 +347,22 @@ class Parser(object):
                     debug_print("... found immediate identifier")
                     try:
                         string, wait = self._parse_immediate(substring(idx, line))
+                        string = Immediate(string, int)
                     except ValueError:
                         sys.exit("error: invalid base syntax for immediate")
                 elif char == self.REGISTER_IDENT:
                     debug_print("... found register identifier")
-                    string, wait = self._parse_token(substring(idx, line), True)
+                    string, wait = self._parse_token(substring(idx, line), define_symbols)
                 elif char == self.STRING_IDENT:
                     debug_print("... found string identifier")
                     string, wait = self._parse_string(substring(idx, line))
+                    string = Immediate(string, str)
                 elif char == self.EXTREF_IDENT:
                     debug_print("... found ext. reference identifier")
                     string, wait = self._parse_extref(substring(idx, line))
                 elif char.isalpha():
                     debug_print("... found general variable-name/token identifier")
-                    string, wait = self._parse_token(substring(idx-1, line), False)
+                    string, wait = self._parse_token(substring(idx-1, line), not define_symbols)
                     wait -= 1
                 else:
                     sys.exit("error: invalid indentifier")
@@ -296,10 +371,35 @@ class Parser(object):
                 if string:
                     tokens.append(string)
                 debug_print(tokens)
+            opcode_operand.append([opcode, *tokens])
+        return opcode_operand
+
+    def verify_operands(self, instructions):
+        for idx, instruction in enumerate(instructions):
+            opcode, *operands = instruction
+            debug_print("verify_operands: opcode = %s operands = %s" % (opcode, operands))
+            if not any(opcode in v for v in self.opcode_operand_template.values()):
+                sys.exit("error: no such opcode %r at instruction #%d" % (opcode, idx+1))
+            templates = []
+            for k, v in self.opcode_operand_template.items():
+                if opcode in v:
+                    templates.append(k)
+            types = (*map(type, operands),)
+            debug_print("verify_operands: types = %s" % (types,))
+            if types not in templates:
+                sys.exit(("error: invalid operands for opcode %r at instruction #%d\n\t" % (opcode, idx+1)) + 
+                         "expected %s\n\tgot %r" % ('\n\t\t '.join("%s" % (t,) for t in templates), types)
+                        )
+        return True
+
 
 def debug_print(*args, **kwargs):
     if is_debug:
-        print("debug:", *args, **kwargs)
+        is_pprint = os.environ.get("PPRINT", False)
+        if is_pprint:
+            pprint(*args, **kwargs)  # why this broke smh
+        else:
+            print("debug:", *args, **kwargs)
 
 
 is_debug = os.environ.get('DEBUG', False)
@@ -309,4 +409,5 @@ if not os.path.isfile(filename):
     sys.exit("error: %r is either a directory or doesn't exist" % filename)
 
 with Parser(filename) as parser:
-    parser.parse_instructions()
+    instructions = parser.parse_instructions()
+    parser.verify_operands(instructions)
