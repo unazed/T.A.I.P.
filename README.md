@@ -1,5 +1,5 @@
 # T.A.I.P.
-the assembly interpeter [in] python
+the assembly interpeter [in] python (also taip means yes in my language)
 
 at the moment (2:21 31st May '18), the interpreter supports:
 - simple compilation-error tracebacks
