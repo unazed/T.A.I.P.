@@ -20,23 +20,27 @@ Reference = namedtuple("Reference", ["name", "data", "reference", "type"])
 # practically just casting the underlying reference
 # to another type e.g.: int, float, etc.
 
+globals()['pass'] = lambda v: v
+globals()['create_list'] = lambda *args: [*args]
+globals()['create_tuple'] = lambda *args: (*args,)
+
 
 class Namespace(object):
     def __init__(self, registers=None, variables=None):
-        self.registers = registers or set()
-        self.variables = variables or set()
+        self.registers = registers or []
+        self.variables = variables or []
     def add_register(self, name, data=None, size=64):
         if isinstance(data, int) and data.bit_length() > size:
             sys.exit("error: operand-size mismatch with register size")
             # no overflowing here buddy
-        self.registers.add(Register(name, data, type(data), size))
+        self.registers.append(Register(name, data, type(data), size))
     def add_variable(self, name, data):
         debug_print("add_variable: name = %s data = %s" % (name, str(data)[:100]))
         reference = Reference(name, data, None, type(data))
         reference = reference._replace(reference=ReferencePointer(reference, type(data)))
         # one-layer circular reference pointing
         # so many fucking `reference`s
-        self.variables.add(reference.reference)
+        self.variables.append(reference.reference)
         # this implementation has the issue that it won't allow
         # disjoint ReferencePointers to point to the same object
         # because the inherent behaviour of sets would eliminate
@@ -56,7 +60,7 @@ class Namespace(object):
             new_reg = new_reg._replace(type=type(newattr))
             debug_print("set_register: from %s to %s" % (reg, new_reg))
             self.registers.remove(reg)
-            self.registers.add(new_reg)
+            self.registers.append(new_reg)
         elif var_p:
             var = var_p.reference
             new_var = var._replace(**{attr: newattr})
@@ -66,7 +70,7 @@ class Namespace(object):
             # new_var = new_var._replace(reference=new_var_p) ; redundant?
             debug_print("set_variable: from %s to %s" % (var, new_var))
             self.variables.remove(var_p)
-            self.variables.add(new_var_p)
+            self.variables.append(new_var_p)
         return True
     def get_register(self, name):
         for register in self.registers:
@@ -88,7 +92,7 @@ class Parser(object):
     STRING_IDENT    = '"'
     EXTREF_IDENT    = '@'
 
-    VALID_CHARSET = string.ascii_letters + string.digits + "_"
+    VALID_CHARSET = string.ascii_letters + string.digits + "_."
 
     EXTREF_LOCATIONS = (globals, locals, lambda: builtins.__dict__)
 
@@ -102,7 +106,7 @@ class Parser(object):
             if op2.type is not int else
             sys.exit("runtime error: #3 operand not callable in call")
             if not callable(op3.data) else
-            op1.data(*[op3.data(item.data) for item in self.stack[:op2.data]]),
+            self.parser_namespace.set_variable("rax", "data", op1.data(*[op3.data(item.data) for item in self.stack[:op2.data]])),
         "push": lambda self, op1:
             self.stack.insert(0, op1),
         "pop": lambda self, op1:
@@ -115,29 +119,61 @@ class Parser(object):
         "inc": lambda self, op1:
             self.parser_namespace.set_variable(op1.name, "data", op1.data+1)
             if op1.type is int else
-            sys.exit("runtime error: #1 operand not integer in inc"),
+            sys.exit("runtime error: #1 operand type invalid in inc"),
         "add": lambda self, op1, op2:
             self.parser_namespace.set_variable(op1.name, "data", op1.data+op2.data)
             if (op1.type is int and op2.type is int) or
                (op1.type is str and op2.type is str) else
-            sys.exit("runtime error: #1/#2 operand types must be valid in add"),
+            self.parser_namespace.set_variable(op1.name, "data", op1.data+chr(op2.data))
+            if op1.type is str and op2.type is int else
+            sys.exit("runtime error: #1/#2 operand types invalid in add"),
+        "mul": lambda self, op1, op2:
+            self.parser_namespace.set_variable(op1.name, "data", op1.data*op2.data)
+            if op1.type is int and op2.type is int else
+            sys.exit("runtime error: #1/#2 operand types invalid in mul"),
+        "div": lambda self, op1, op2:
+            self.parser_namespace.set_variable(op1.name, "data", op1.data//op2.data)
+            if op1.type is int and op2.type is int else
+            sys.exit("runtime error: #1/#2 operand types invalid in div"),
         "breakpoint": lambda _:
-            breakpoint()
+            breakpoint(),
+        "getattr": lambda self, op1, op2:
+            self.stack.append(getattr(op1.data, op2.data)),
+        "printstack": lambda self:
+            self.print_stack(),
+        "printregisters": lambda self:
+            self.print_registers(),
+        "printvars": lambda self:
+            self.print_variables(),
+        "getitem": lambda self, op1, op2:
+            self.stack.append(op1.data[op2.data])
+            if isinstance(op1.data, (dict, list, tuple, frozenset, set)) else
+            sys.exit("runtime error: #1 operand type invalid in getitem"),
+        "import": lambda self, op1, op2=None:
+            (self.stack.append(__import__(op1.data))
+             if op2 is None else
+             self.parser_namespace.set_variable(op2.name, "data", __import__(op1.data)))
+            if op1.type is str else
+            sys.exit("runtime error: #1 operand type invalid in import")
     }
 
+    BINARY_OPCODES = ["mul", "div", "add"]
     opcode_operand_template = {
-        (): ("breakpoint",),
-        (Register,): ("call", "inc", "push", "pop"),
-        (Reference,): ("call", "inc", "push", "pop"),
-        (Immediate,): ("push",),
+        (): ("breakpoint", "printstack", "printregisters", "printvars"),
+        (Register,): ("call", "inc", "push", "pop", "import"),
+        (Reference,): ("call", "inc", "push", "pop", "import"),
+        (Immediate,): ("push", "import"),
 
-        (Register, Register): ("mov", "add"),
-        (Register, Immediate): ("mov", "add"),
-        (Register, Reference): ("mov", "add"),
-        (Reference, Immediate): ("mov", "call", "add"),
-        (Reference, Register): ("mov", "call", "add"),
-        (Reference, Reference): ("mov", "call", "add"),  # typically mem <- mem operations aren't permissible
-        
+        (Register, Register): ("mov", *BINARY_OPCODES, "getitem", "import"),
+        (Register, Immediate): ("mov", "getattr", *BINARY_OPCODES, "getitem", "import"),
+        (Register, Reference): ("mov", *BINARY_OPCODES, "getitem", "import"),
+        (Reference, Immediate): ("mov", "call", "getattr", *BINARY_OPCODES, "getitem", "import"),
+        (Reference, Register): ("mov", "call", *BINARY_OPCODES, "getitem", "import"),
+        (Reference, Reference): ("mov", "call", *BINARY_OPCODES, "getitem", "import"),  # typically mem <- mem operations aren't permissible
+        (Immediate, Immediate): ("import",),
+        (Immediate, Register): ("import",),
+        (Immediate, Reference): ("import",),
+
         (Reference, Register, Reference): ("call",),
         (Reference, Immediate, Reference): ("call",),
         (Reference, Reference, Reference): ("call",)
@@ -194,7 +230,7 @@ class Parser(object):
     def _parse_token(self, substring, is_register, define_references=True):
         token = ""
         idx = 0  # for __exit__
-        if not substring[0].isalpha():
+        if not substring[0] in string.ascii_letters + "_":
             sys.exit("error: invalid token identifier")
         for idx, char in enumerate(substring):
             debug_print("_parse_token: ...", char)
@@ -299,6 +335,7 @@ class Parser(object):
 
         for line_no, line in enumerate(self.data.splitlines()):
             tokens = []
+            debug_print("\n")
             if not line:
                 continue
             # line_no is used by __exit__
@@ -349,7 +386,7 @@ class Parser(object):
                 elif char == self.EXTREF_IDENT:
                     debug_print("... found ext. reference identifier")
                     string, wait = self._parse_extref(substring(idx, line))
-                elif char.isalpha():
+                elif char in self.VALID_CHARSET:
                     debug_print("... found general variable-name/token identifier")
                     string, wait = self._parse_token(substring(idx-1, line), not define_symbols)
                     wait -= 1
@@ -410,6 +447,12 @@ class Parser(object):
         for item in self.stack:
             print("\t%r: %r" % (type(item), item))
 
+    def print_variables(self):
+        print("VARIABLE DUMP:")
+        for variable in self.parser_namespace.variables:
+            var = variable.reference
+            print("\t%s (var-type=%s ref.p-type=%s): %r" % (var.name, var.type, variable.type, var.data))
+
 
 def debug_print(*args, **kwargs):
     if is_debug:
@@ -432,3 +475,4 @@ with Parser(filename) as parser:
     parser.execute_instructions(parsed_instructions)
     parser.print_registers()
     parser.print_stack()
+    parser.print_variables()
