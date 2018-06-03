@@ -19,16 +19,27 @@ Reference = namedtuple("Reference", ["name", "data", "reference", "type"])
 # you change the ReferencePointer's typefield you're
 # practically just casting the underlying reference
 # to another type e.g.: int, float, etc.
+Label = namedtuple("Label", ["name", "offset"])
 
-globals()['pass'] = lambda v: v
-globals()['create_list'] = lambda *args: [*args]
-globals()['create_tuple'] = lambda *args: (*args,)
+globals()['pass'] = lambda v: v  # pass = lambda v: v causes a SyntaxError
+create_list = lambda *args: [*args]
+create_tuple = lambda *args: (*args,)
 
 
 class Namespace(object):
-    def __init__(self, registers=None, variables=None):
+    def __init__(self, registers=None, variables=None, labels=None):
         self.registers = registers or []
         self.variables = variables or []
+        self.labels = labels or []
+        # originally the data-type was set() however
+        # you can't place unhashable types into sets
+        # which doesn't cause issues from the fundamental
+        # code, but if you try to append a list using
+        # the instructions, it'd fail unexpectedly.
+    def add_label(self, name, offset):
+        debug_print("add_label: name = %s offset = %s" % (name, offset))
+        if isinstance(offset, int):
+            self.labels.append(Label(name, offset))
     def add_register(self, name, data=None, size=64):
         if isinstance(data, int) and data.bit_length() > size:
             sys.exit("error: operand-size mismatch with register size")
@@ -77,6 +88,12 @@ class Namespace(object):
             debug_print("get_register: register.name = %s" % register.name)
             if register.name == name:
                 return register
+        return False
+    def get_label(self, name):
+        for label in self.labels:
+            debug_print("get_label: label.name = %s" % label.name)
+            if label.name == name:
+                return label
         return False
     def get_variable(self, name):
         for variable in self.variables:
@@ -154,15 +171,29 @@ class Parser(object):
              if op2 is None else
              self.parser_namespace.set_variable(op2.name, "data", __import__(op1.data)))
             if op1.type is str else
-            sys.exit("runtime error: #1 operand type invalid in import")
+            sys.exit("runtime error: #1 operand type invalid in import"),
+        "clearstack": lambda self:
+            self.stack.clear(),
+        "label": lambda self, op1:
+            self.parser_namespace.add_label(op1.data, self._exec_idx)
+            if isinstance(op1, Immediate) else
+            self.parser_namespace.add_label(op1.name, self._exec_idx)
+            if isinstance(op1, Reference) else
+            sys.exit("runtime error: #1 operand type invalid in label"),
+        "goto": lambda self, op1:
+            setattr(self, "_goto_instruction", self.parser_namespace.get_label(op1.data))
+            if isinstance(op1, Immediate) else
+            setattr(self, "_goto_instruction", self.parser_namespace.get_label(op1.name))
+            if isinstance(op1, Reference) else
+            sys.exit("runtime error: #1 operand type invalid in goto")
     }
 
     BINARY_OPCODES = ["mul", "div", "add"]
     opcode_operand_template = {
-        (): ("breakpoint", "printstack", "printregisters", "printvars"),
+        (): ("breakpoint", "printstack", "printregisters", "printvars", "clearstack"),
         (Register,): ("call", "inc", "push", "pop", "import"),
-        (Reference,): ("call", "inc", "push", "pop", "import"),
-        (Immediate,): ("push", "import"),
+        (Reference,): ("call", "inc", "push", "pop", "import", "label", "goto"),
+        (Immediate,): ("push", "import", "label", "goto"),
 
         (Register, Register): ("mov", *BINARY_OPCODES, "getitem", "import"),
         (Register, Immediate): ("mov", "getattr", *BINARY_OPCODES, "getitem", "import"),
@@ -422,20 +453,27 @@ class Parser(object):
         debug_print("verify_operands: new_opcodes = %s" % (new_opcodes,))
         return new_opcodes
 
+    def _execute_instruction(self, instruction):
+        new_ops = []
+        if len(instruction) > 1:
+            for op in instruction[1:]:
+                if isinstance(op, Register):
+                    new_ops.append(self.parser_namespace.get_register(op.name))
+                elif isinstance(op, Reference):
+                    new_ops.append(self.parser_namespace.get_variable(op.name).reference)
+                else:
+                    new_ops.append(op)
+            instruction = [instruction[0], *new_ops]
+        debug_print("execute_instruction:\n\t\t\b", '\n\t\t'.join("- %s" % (c,) for c in instruction))
+        instruction[0](self, *instruction[1:])
+
     def execute_instructions(self, instructions):
-        for instruction in instructions:
-            new_ops = []  # this solution took 1.5 hours to find
-            if len(instruction) > 1:
-                for op in instruction[1:]:
-                    if isinstance(op, Register):
-                        new_ops.append(self.parser_namespace.get_register(op.name))
-                    elif isinstance(op, Reference):
-                        new_ops.append(self.parser_namespace.get_variable(op.name).reference)
-                    else:
-                        new_ops.append(op)
-                instruction = [instruction[0], *new_ops]
-            debug_print("execute_instruction:\n\t\t\b", '\n\t\t'.join("- %s" % (c,) for c in instruction))
-            instruction[0](self, *instruction[1:])
+        for self.exec_idx, instruction in enumerate(instructions):
+            # exec_idx provided to the instruction's function
+            self._goto_instruction = None
+            self._execute_instruction(instruction)
+            if self._goto_instruction is not None:
+
 
     def print_registers(self):
         print("REGISTER DUMP:")
