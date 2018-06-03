@@ -37,15 +37,18 @@ class Namespace(object):
         # which doesn't cause issues from the fundamental
         # code, but if you try to append a list using
         # the instructions, it'd fail unexpectedly.
+        
     def add_label(self, name, offset):
         debug_print("add_label: name = %s offset = %s" % (name, offset))
         if isinstance(offset, int):
             self.labels.append(Label(name, offset))
+            
     def add_register(self, name, data=None, size=64):
         if isinstance(data, int) and data.bit_length() > size:
             sys.exit("error: operand-size mismatch with register size")
             # no overflowing here buddy
         self.registers.append(Register(name, data, type(data), size))
+        
     def add_variable(self, name, data):
         debug_print("add_variable: name = %s data = %s" % (name, str(data)[:100]))
         reference = Reference(name, data, None, type(data))
@@ -61,6 +64,7 @@ class Namespace(object):
         # itself; and later on, if this becomes an issue one can
         # simply just switch to class-generated structures instead
         # of namedtuples
+        
     def set_variable(self, name, attr, newattr):
         debug_print("set_variable: name = %s attr = %s newattr = %s" % (name, attr, newattr))
         var_p = self.get_variable(name)
@@ -84,18 +88,21 @@ class Namespace(object):
             self.variables.remove(var_p)
             self.variables.append(new_var_p)
         return True
+    
     def get_register(self, name):
         for register in self.registers:
             debug_print("get_register: register.name = %s" % register.name)
             if register.name == name:
                 return register
         return False
+    
     def get_label(self, name):
         for label in self.labels:
             debug_print("get_label: label.name = %s" % label.name)
             if label.name == name:
                 return label
         return False
+    
     def get_variable(self, name):
         for variable in self.variables:
             debug_print("get_variable: variable.name = %s" % variable.reference.name)
@@ -103,6 +110,7 @@ class Namespace(object):
                 return variable
         return False
 
+    
 class Parser(object):
     COMMENT_IDENT   = ';'
     IMMEDIATE_IDENT = '$'
