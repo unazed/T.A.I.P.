@@ -3,6 +3,7 @@ import os
 import io
 import string
 import builtins
+import types
 from pprint import pprint
 from collections import namedtuple
 
@@ -175,9 +176,9 @@ class Parser(object):
         "clearstack": lambda self:
             self.stack.clear(),
         "label": lambda self, op1:
-            self.parser_namespace.add_label(op1.data, self._exec_idx)
+            self.parser_namespace.add_label(op1.data, self.exec_idx)
             if isinstance(op1, Immediate) else
-            self.parser_namespace.add_label(op1.name, self._exec_idx)
+            self.parser_namespace.add_label(op1.name, self.exec_idx)
             if isinstance(op1, Reference) else
             sys.exit("runtime error: #1 operand type invalid in label"),
         "goto": lambda self, op1:
@@ -334,7 +335,11 @@ class Parser(object):
 
     def __exit__(self, exc_class, exc_info, exc_tb):
         debug_print("exiting with context-handler, exception arguments:", (exc_class, exc_info, exc_tb))
-        if exc_class is None:
+        if exc_class is KeyboardInterrupt:
+            print(self.print_stack())
+            print(self.print_registers())
+            print(self.print_variables())
+        elif exc_class is None:
             return
         try:
             while exc_tb.tb_frame.f_code.co_name != "parse_instructions":
@@ -453,7 +458,7 @@ class Parser(object):
         debug_print("verify_operands: new_opcodes = %s" % (new_opcodes,))
         return new_opcodes
 
-    def _execute_instruction(self, instruction):
+    def _single_execute_instruction(self, instruction):
         new_ops = []
         if len(instruction) > 1:
             for op in instruction[1:]:
@@ -464,16 +469,25 @@ class Parser(object):
                 else:
                     new_ops.append(op)
             instruction = [instruction[0], *new_ops]
-        debug_print("execute_instruction:\n\t\t\b", '\n\t\t'.join("- %s" % (c,) for c in instruction))
+        debug_print("_single_execute_instruction:\n\t\t\b", '\n\t\t'.join("- %s" % (c,) for c in instruction))
         instruction[0](self, *instruction[1:])
 
-    def execute_instructions(self, instructions):
+    def _multi_execute_instruction(self, instructions):
         for self.exec_idx, instruction in enumerate(instructions):
-            # exec_idx provided to the instruction's function
+            if self.exec_idx == len(instructions)-1:
+                is_final_instruction = True
+            # self.exec_idx provided to the instruction's function
             self._goto_instruction = None
-            self._execute_instruction(instruction)
+            self._single_execute_instruction(instruction)
             if self._goto_instruction is not None:
+                debug_print("_multi_execute_instruction:", self._goto_instruction)
+                yield self._multi_execute_instruction(instructions[self._goto_instruction.offset:])
 
+    def execute_instructions(self, instructions):
+        instr = next(self._multi_execute_instruction(instructions))
+        while isinstance(instr, types.GeneratorType):
+            debug_print("execute_instructions: in trampoline")
+            instr = next(instr)
 
     def print_registers(self):
         print("REGISTER DUMP:")
