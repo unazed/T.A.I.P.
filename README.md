@@ -15,7 +15,7 @@ and at the moment (00:30 1st June '18), the interpreter plans on (soon) supporti
 - stack frames (kinda supported but not fully implemented)
 - the heap
 - sections
-- branching labels
+- ~~branching labels~~ (added labels/jumping but soon enough i'll also add conditional branching)
 
 it isn't an assembler, nor is it a compiler.
 the syntax is defined in `asm.py`, alongside everything else. but for time's sake (for you), i'll redefine the syntax here (it's basically some GAS syntax + Intel dst-src operand ordering):
